@@ -87,7 +87,7 @@ By default the loader keeps the largest connected component
    python real/analyze_trajectory.py --runs outputs/real_trajectory \
        --arch gin_pe --probe direct_m10_error_mean --out results/real/traj
    python analysis/synthetic_reference.py \
-       --summary results/summaries/summary_sweep_n.json
+       --summary results/summary/summary_sweep_n.json
    ```
 
    `analyze_trajectory.py` prints a checkpoint table and the Spearman

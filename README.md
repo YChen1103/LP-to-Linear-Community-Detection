@@ -83,7 +83,7 @@ python scripts/extract_summary.py outputs/main_sweep_n --out summary_sweep_n.jso
 ```
 
 The summary files for the runs reported in the paper are in
-`results/summaries/`.
+`results/summary/`.
 
 ## Baselines without LP training
 
@@ -96,7 +96,7 @@ evaluates the GIN+PE encoder at initialization, before any gradient step.
 
 ```bash
 python scripts/pe_baselines.py --K 3 --n-list 500,1000,2000 --seeds 0-9 \
-    --summary results/summaries/summary_sweep_n.json --include-lap
+    --summary results/summary/summary_sweep_n.json --include-lap
 python scripts/untrained_control.py --ns 500 1000 2000 --device cuda
 ```
 
