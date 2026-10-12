@@ -1,0 +1,116 @@
+extends: ../base.yaml
+
+# =============================================================================
+# rho_n (edge density) ablation: 2D sweep over (rho_n, n).
+#
+# Sparsity scaling: p_in -> rho_n * p_in, p_out -> rho_n * p_out.
+#
+# Varies graph sparsity, which affects the spectral PE input, the optimal
+# bias |b*| and hence the score range. Delta_s changes little with rho_n
+# (logit differences are nearly rho_n-invariant at small p).
+# =============================================================================
+experiment:
+  name: ablation_rho_sparsity
+  description: >
+    rho_n (edge density) ablation: 2D sweep over (rho_n, n) at the K=3
+    baseline (p_in_base=0.10, p_out_base=0.04, cap_ratio=2.0), with
+    B_0 = |b*| + 0.5 recomputed for each cell.
+
+# 10 seeds for clean median + IQR.
+seeds:
+  list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# K=3 sym SBM. p_in/p_out are BASE values; rho_n scales them via sweep.
+sbm:
+  K: 3
+  block_spec:
+    type: assortative
+    p_in: 0.10
+    p_out: 0.04
+  rho_n: 1.0                     # placeholder; overridden by sweep
+  pi: uniform
+
+mask:
+  tau: 0.2
+
+encoder:
+  family: gin
+  d: 16
+  hidden_dim: 64
+  num_layers: 2
+  use_layernorm: true
+  features:
+    mode: spectral_pe
+    dim: 8
+  R_spec:
+    mode: fixed
+    value: 1.5
+
+decoder:
+  family: bilinear
+  symmetric: true
+  W_max_spec:
+    mode: from_capacity_ratio
+    capacity_ratio: 2.0
+  # B_0 = |b*| + slack, recomputed for each rho_n cell.
+  B_0_spec:
+    mode: from_b_star
+    slack: 0.5
+
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  max_epochs: 2500
+  patience: 80
+  early_stop: false
+  bias_init_mode: zero
+  random_init_half_range: 0.2
+  val_split_of_H: 0.5
+  restarts: 1
+  batch_mode: full_batch
+
+classifiers:
+  oracle:
+    enabled: true
+  plug_in:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  direct:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  kmeans:
+    enabled: true
+    n_init: 50
+
+output:
+  base_dir: outputs
+  save_embeddings: true
+  save_per_node_diagnostics: true
+  save_train_curve: true
+  verify_assumptions: true
+
+runtime:
+  device: cuda
+  num_workers: 6    
+  print_progress: true
+
+# -----------------------------------------------------------------------------
+# Sweep: 2D grid over (rho_n, n).
+#
+# rho_n values range from 2x denser to 20x sparser than the main_sweep_n
+# baseline (rho_n = 1.0); rho_n = 0.05 gives average degree ~3 at n=1000.
+#
+# n values: same as the W_max and B_0 ablations.
+# -----------------------------------------------------------------------------
+sweep:
+  mode: grid
+  axes:
+    - name: rho_n
+      axis: sbm.rho_n
+      values: [2.0, 1.0, 0.5, 0.2, 0.1, 0.05]
+
+    - name: n
+      axis: sbm.n
+      values: [100, 200, 500, 1000, 2000]

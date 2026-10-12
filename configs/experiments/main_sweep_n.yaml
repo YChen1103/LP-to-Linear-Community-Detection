@@ -1,0 +1,168 @@
+extends: ../base.yaml
+
+experiment:
+  name: main_sweep_n
+  description: >
+    Main sweep over sample size n, for five architectures and K in {2, 3, 4}.
+    Evaluates the main theorem, the half-empirical corollary and the
+    train-side corollary.
+
+# Base seeds (each derives independent SBM, mask, init, label, feature seeds).
+
+seeds:
+  list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# SBM: assortative, fixed (p_in, p_out); K is swept below.
+
+sbm:
+  block_spec:
+    type: assortative
+    p_in: 0.1
+    p_out: 0.04
+  rho_n: 1.0
+  pi: uniform
+
+mask:
+  tau: 0.2
+
+
+
+encoder:
+  d: 16
+  hidden_dim: 64
+  use_layernorm: true
+  R_spec:
+    mode: fixed
+    value: 1.5
+
+
+
+
+decoder:
+  family:   bilinear
+  symmetric: true
+  W_max_spec:
+    mode: from_capacity_ratio
+    capacity_ratio: 2.0
+  B_0_spec:
+    mode: from_b_star
+    slack: 0.5
+
+
+
+training:
+  lr:   1.0e-3
+  weight_decay: 1.0e-4
+  max_epochs: 2500
+  patience: 80
+  early_stop: false
+  bias_init_mode: zero 
+  random_init_half_range: 0.2
+  val_split_of_H: 0.5
+  restarts: 1
+  batch_mode: full_batch
+
+classifiers:
+  oracle:
+    enabled: true
+  plug_in:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]   # plug-in and direct share these (must match)
+    n_label_resamples: 5
+  direct:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  kmeans:
+    enabled: true
+    n_init: 50
+
+output:
+  base_dir: outputs
+  save_embeddings: true
+  save_per_node_diagnostics: true
+  save_train_curve: true
+  verify_assumptions: true
+
+runtime:
+  device: cuda
+  num_workers: 6
+  print_progress: true
+
+# -----------------------------------------------------------------------------
+# Sweep: grid over (K, n, arch).
+# Each arch sets its own `num_layers` and feature config via overrides.
+# -----------------------------------------------------------------------------
+sweep:
+  mode: grid
+  axes:
+
+    - name: K
+      axis: sbm.K
+      values: [2, 3, 4]
+
+    - name: n
+      axis: sbm.n
+      values: [100, 200, 300, 400, 500, 1000, 1500, 2000]
+
+    - name: arch
+      values:
+
+        - label: gcn_pe
+          overrides:
+            encoder.family: gcn
+            encoder.num_layers: 2
+            encoder.features.mode: laplacian_pe
+            encoder.features.dim: 8
+
+        - label: gin_pe
+          overrides:
+            encoder.family: gin
+            encoder.num_layers: 2
+            encoder.features.mode: spectral_pe
+            encoder.features.dim: 8
+
+        - label: cp_random
+          overrides:
+            encoder.family: centered_power
+            encoder.num_layers: 10
+            encoder.features.mode: random_normal
+            encoder.features.dim: 16
+            training.max_epochs: 3500 
+
+        - label: gin_random
+          overrides:
+            encoder.family: gin
+            encoder.num_layers: 2
+            encoder.features.mode: random_normal
+            encoder.features.dim: 16
+            training.restarts: 3 
+
+        - label: gat_pe
+          overrides:
+            encoder.family: gat
+            encoder.num_layers: 2
+            encoder.num_heads: 4
+            encoder.features.mode: laplacian_pe
+            encoder.features.dim: 8
+
+       # Optional extras -- uncomment to include in sweep:
+       # - label: gcn_random
+       #   overrides:
+       #     encoder.family: gcn
+       #     encoder.num_layers: 2
+       #     encoder.features.mode: random_normal
+       #     encoder.features.dim: 16
+       # - label: cp_ones
+       #   overrides:
+       #     encoder.family: centered_power
+       #     encoder.num_layers: 10
+       #     encoder.features.mode: ones
+       #     encoder.features.dim: 16
+       # - label: gcn_ones
+       #   overrides:
+       #     encoder.family: gcn
+       #     encoder.num_layers: 2
+       #     encoder.features.mode: ones
+       #     encoder.features.dim: 16
+

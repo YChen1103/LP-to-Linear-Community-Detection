@@ -1,0 +1,193 @@
+# =============================================================================
+# Base config: defines the full schema with sensible defaults.
+# Every experiment-specific config under configs/experiments/ extends this
+# (via `extends: base.yaml`) and overrides specific fields.
+#
+# Every numerical field that you might want to set _adaptively_ (e.g. derived
+# from SBM capacity) uses a `*_spec` dict with a `mode` field, rather than a
+# raw number. This lets a single config naturally support both fixed numerical
+# values and capacity-relative derivations.
+# =============================================================================
+
+experiment:
+  name: "base"            # Sets output directory: outputs/<name>/
+  description: "Default reference configuration"
+
+# -----------------------------------------------------------------------------
+# Sweep specification
+# -----------------------------------------------------------------------------
+# A sweep iterates over `sweep_values` for the field at `sweep_axis` (dotted
+# path). For each value, it runs `seeds` independent seeds. Optionally, a
+# `coupled` block lets multiple fields move together.
+#
+# When `sweep_axis` is null, the experiment runs a single setting (with all
+# seeds), useful for sanity-check / reference runs.
+#
+# For multi-axis sweeps, use `mode: grid` with a list of `axes` (see the
+# configs under configs/experiments/).
+# -----------------------------------------------------------------------------
+sweep:
+  axis: null                          # e.g. "sbm.n" or "decoder.W_max_spec.value"
+  values: []                          # e.g. [200, 500, 1000, 2000, 5000]
+  coupled: {}                         # e.g. {decoder.W_max_spec.value: "2.0 * $capacity_required / $encoder.R_spec.value**2"}
+
+seeds:
+  list: [0, 1, 2, 3, 4]               # Independent (graph, edges, mask, model) seeds
+  # Each seed k yields four sub-seeds for graph permutation, Bernoulli edge sampling,
+  # mask sampling, and model init, derived deterministically.
+
+# -----------------------------------------------------------------------------
+# SBM (Stochastic Block Model) parameters
+# -----------------------------------------------------------------------------
+sbm:
+  n: 1000                             # Number of nodes (must be divisible by K for balanced)
+  K: 2                                # Number of communities
+
+  # Block matrix B specification:
+  # `assortative`: B[a,a] = p_in, B[a,b] = p_out for a!=b
+  # `custom`: provide explicit p_matrix
+  block_spec:
+    type: "assortative"               # "assortative" | "custom"
+    p_in: 0.8
+    p_out: 0.2
+    # p_matrix: [[0.8, 0.2], [0.2, 0.8]]  # used when type == "custom"
+
+  # Sparsity scaling: actual p_ab = rho_n * B[a,b]
+  rho_n: 1.0                          # 1.0 = dense; smaller = sparser
+
+  # Community proportions: "uniform" or explicit list summing to 1
+  pi: "uniform"
+
+# -----------------------------------------------------------------------------
+# Mask
+# -----------------------------------------------------------------------------
+mask:
+  tau: 0.2                            # Holdout fraction; M_ij ~ Ber(tau)
+
+# -----------------------------------------------------------------------------
+# Encoder
+# -----------------------------------------------------------------------------
+encoder:
+  family: "centered_power"            # "centered_power" | "gin" | "gcn" | "graphsage" | "mlp"
+  d: 16                               # Output embedding dimension
+  hidden_dim: 32
+  num_layers: 8
+  dropout: 0.0
+  use_layernorm: true
+
+  # Initial node features:
+  features:
+    mode: "ones"                      # "ones" | "random_normal" | "degree" | "laplacian_pe" | "spectral_pe"
+    dim: 4                            # used by random_normal, laplacian_pe, spectral_pe
+    pe_normalize: "std"               # only for laplacian_pe: "raw" | "std" | "sqrt_n".
+                                      # spectral_pe always uses sqrt(n) scaling (as in the paper).
+
+  # Norm constraint ||z_i|| <= R (bounded encoder-decoder class)
+  R_spec:
+    mode: "fixed"                     # "fixed" | "from_capacity_ratio" | "from_b_star"
+    value: 1.5
+
+# -----------------------------------------------------------------------------
+# Decoder
+# -----------------------------------------------------------------------------
+decoder:
+  family: "bilinear"                  # "bilinear" | "inner_product"
+  symmetric: true                     # Bilinear-only: enforce W = W^T
+
+  # Operator norm bound ||W||_op <= W_max (bounded encoder-decoder class).
+  # `from_capacity_ratio` sets W_max = capacity_ratio * ||M_tilde||_op / R^2
+  W_max_spec:
+    mode: "from_capacity_ratio"       # "fixed" | "from_capacity_ratio"
+    capacity_ratio: 2.0               # used when mode == "from_capacity_ratio"
+    # value: 2.0                      # used when mode == "fixed"
+
+  # Bias bound |b| <= B_0 (bounded encoder-decoder class)
+  B_0_spec:
+    mode: "from_b_star"               # "fixed" | "from_b_star" | "multiple_of_b_star"
+    slack: 0.5                        # B_0 = |b*| + slack
+    # value: 1.0                      # used when mode == "fixed"
+    # factor: 1.5                     # used when mode == "multiple_of_b_star"
+
+# -----------------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------------
+training:
+  optimizer: "adam"
+  lr: 1.0e-2
+  weight_decay: 1.0e-4
+  max_epochs: 400
+  patience: 80                        # Early stopping on val loss (only when early_stop=true)
+  clip_grad_norm: 5.0
+  restarts: 1                         # Multi-restart: train this many, keep best by val
+  val_split_of_H: 0.5                 # Of held-out H, use this fraction as val (rest test)
+
+  # Batch mode: "full_batch" (gradient on all of T per step) or "mini_batch"
+  # (stochastic gradient on a random subset of T). Theory is unaffected -- both
+  # are SGD on R_T_emp; mini_batch can be useful at large n for memory/time.
+  batch_mode: "full_batch"
+  batch_size: 4096                    # only used when batch_mode == "mini_batch"
+
+  # Early-stopping switch:
+  #   true  : stop when val loss stops improving for `patience` epochs;
+  #           final state = best-by-val checkpoint;
+  #           multi-restart selection by best val loss.
+  #   false : run all `max_epochs`, never look at val for stopping or selection;
+  #           final state = LAST epoch state;
+  #           multi-restart selection by lowest train loss at last epoch.
+  # NB: even when early_stop=false, val/test loss is still computed and logged
+  # as an observable; the switch only controls whether training/selection USES it.
+  early_stop: true
+
+  # Bias-init mode for the decoder bias parameter.
+  # Options:
+  #   "zero", "empirical_logit", "mean_offdiag_logit",
+  #   "b_star"        - exact paper b* (operator-norm minimizer); most-oracle.
+  #   "near_b_star"   - b* + N(0, near_b_star_sigma^2). Tests robustness.
+  #   "random"        - Uniform(-half*B_0, half*B_0); half = random_init_half_range.
+  # "oracle_bstar" is accepted as an alias of "mean_offdiag_logit" (kept for compatibility).
+  bias_init_mode: "b_star"
+  near_b_star_sigma: 0.1              # std of Gaussian perturbation for "near_b_star"
+  random_init_half_range: 0.5         # for "random" mode: b ~ U(-half*B_0, +half*B_0)
+
+  # Periodic evaluation: write a full eval log every `eval_every` epochs.
+  # Set eval_every: 0 to disable periodic eval (only final eval).
+  eval_every: 0
+
+# -----------------------------------------------------------------------------
+# Classifiers to evaluate at each eval point
+# -----------------------------------------------------------------------------
+classifiers:
+  oracle:
+    enabled: true                     # Requires (p_ab) and full labels (synthetic only)
+
+  plug_in:
+    enabled: true
+    m_per_class: [1, 5, 10, 50]       # |L_a| values
+    n_label_resamples: 5              # # times to resample L for each m
+
+  direct:
+    enabled: true                     # Direct logistic regression on z, m labels
+    m_per_class: [1, 5, 10, 50]
+    n_label_resamples: 5
+
+  kmeans:
+    enabled: true                     # K-means in embedding space (with permutation matching)
+    n_init: 50
+
+# -----------------------------------------------------------------------------
+# Output / logging
+# -----------------------------------------------------------------------------
+output:
+  base_dir: "outputs"                 # Final dir: <base_dir>/<experiment.name>/
+  save_embeddings: true               # Dump final z, W, b as npz
+  save_per_node_diagnostics: true     # Per-node tilde_e^2 etc. in final.npz
+  save_train_curve: true              # Per-epoch train/val loss as JSONL
+  verify_assumptions: true            # Sanity-check that ||z||<=R etc. each eval
+
+# -----------------------------------------------------------------------------
+# Hardware / runtime
+# -----------------------------------------------------------------------------
+runtime:
+  device: "cpu"                       # "cpu" | "cuda" | "cuda:0"
+  num_workers: 0
+  print_progress: true

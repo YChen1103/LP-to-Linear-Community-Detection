@@ -1,0 +1,117 @@
+extends: ../base.yaml
+
+experiment:
+  name: sweep_delta
+  description: >
+    Sweep over score-profile separation Delta_s by varying p_in (p_out fixed),
+    at K=3 with a single architecture (GIN+PE).
+
+# 10 seeds for median + IQR.
+seeds:
+  list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# K=3 sym SBM, fixed sparsity baseline.
+# p_out fixed; p_in varies via the sweep axis -> different Delta_s.
+sbm:
+  K: 3
+  block_spec:
+    type: assortative
+    p_in: 0.10                   # placeholder; overridden by sweep axis
+    p_out: 0.04                  # held fixed
+  rho_n: 1.0
+  pi: uniform
+
+mask:
+  tau: 0.2
+
+encoder:
+  d: 16
+  hidden_dim: 64
+  use_layernorm: true
+  R_spec:
+    mode: fixed
+    value: 1.5
+
+decoder:
+  family: bilinear
+  symmetric: true
+  # The Delta_s sweep uses fixed (absolute) W_max and B_0.
+  # from_capacity_ratio would couple W_max to capacity_required, which
+  # itself moves with p_in across the sweep (cap = |logit(p_in)-logit(p_out)|),
+  # confounding the Delta_s effect with a parallel W_max change.
+  # The fixed values cover cap at the largest p_in (p_in=0.30, cap ~ 2.33):
+  # W_max=1.5 gives R^2*W_max = 3.375 >= 2.33; B_0=3.5 covers max|b*| across
+  # the sweep.
+  W_max_spec:
+    mode: fixed
+    value: 1.5
+  B_0_spec:
+    mode: fixed
+    value: 3.5
+
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  max_epochs: 2500
+  patience: 80
+  early_stop: false
+  bias_init_mode: zero
+  random_init_half_range: 0.2
+  val_split_of_H: 0.5
+  restarts: 1
+  batch_mode: full_batch
+
+classifiers:
+  oracle:
+    enabled: true
+  plug_in:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  direct:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  kmeans:
+    enabled: true
+    n_init: 50
+
+output:
+  base_dir: outputs
+  save_embeddings: true
+  save_per_node_diagnostics: true
+  save_train_curve: true
+  verify_assumptions: true
+
+runtime:
+  device: cuda
+  print_progress: true
+
+# -----------------------------------------------------------------------------
+# Sweep: grid over (n, p_in).  Single arch = GIN+PE.
+#
+# Delta_s for p_out=0.04 fixed (K=3, sym, balanced):
+#   Delta_s = sqrt(2/3) * |logit(p_in) - logit(p_out)|
+# -----------------------------------------------------------------------------
+sweep:
+  mode: grid
+  axes:
+    - name: n
+      axis: sbm.n
+      values: [100, 200, 500, 1000]
+
+    - name: p_in
+      axis: sbm.block_spec.p_in
+      values: [0.08, 0.10, 0.15, 0.20, 0.30]
+
+    - name: arch
+      values:
+
+
+        - label: gin_pe
+          overrides:
+            encoder.family: gin
+            encoder.num_layers: 2              # shallow; spectral PE already provides community signal
+            encoder.features.mode: spectral_pe
+            encoder.features.dim: 8            
+            encoder.features.pe_normalize: std

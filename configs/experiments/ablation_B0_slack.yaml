@@ -1,0 +1,115 @@
+extends: ../base.yaml
+
+# =============================================================================
+# B_0 (bias cap) ablation: 2D sweep over (B_0, n).
+#
+# B_0 changes the score range B = R^2 * W_max + B_0, and hence the Step 1
+# constant mu_B, without changing W_max or capacity_required. cap_ratio is
+# held at 2.0. The B_0 values range from below |b*| (bias cap binding) to
+# well above it.
+# =============================================================================
+experiment:
+  name: ablation_B0_slack
+  description: >
+    B_0 (bias cap) ablation: 2D sweep over (B_0, n) at the K=3 baseline
+    (p_in=0.10, p_out=0.04, cap_ratio=2.0). Varies B_0, and hence the
+    Step 1 constant mu_B, with W_max fixed.
+
+# 10 seeds for clean median + IQR; reduce to 3 for smoke test.
+seeds:
+  list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# K=3 baseline -- same as main_sweep_n and the W_max ablation.
+sbm:
+  K: 3
+  block_spec:
+    type: assortative
+    p_in: 0.10
+    p_out: 0.04
+  rho_n: 1.0
+  pi: uniform
+
+mask:
+  tau: 0.2
+
+# GIN + spectral PE -- same architecture as the W_max ablation.
+encoder:
+  family: gin
+  d: 16
+  hidden_dim: 64
+  num_layers: 2
+  use_layernorm: true
+  features:
+    mode: spectral_pe
+    dim: 8
+  R_spec:
+    mode: fixed
+    value: 1.5
+
+decoder:
+  family: bilinear
+  symmetric: true
+  # cap_ratio fixed at 2.0 (it is the sweep axis of the W_max ablation).
+  W_max_spec:
+    mode: from_capacity_ratio
+    capacity_ratio: 2.0
+  # B_0 absolute (not from |b*|) -- this is the sweep axis.
+  B_0_spec:
+    mode: fixed
+    value: 3.4                   # placeholder; overridden by sweep
+
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  max_epochs: 2500
+  patience: 80
+  early_stop: false
+  bias_init_mode: zero
+  random_init_half_range: 0.2
+  val_split_of_H: 0.5
+  restarts: 1
+  batch_mode: full_batch
+
+classifiers:
+  oracle:
+    enabled: true
+  plug_in:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  direct:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  kmeans:
+    enabled: true
+    n_init: 50
+
+output:
+  base_dir: outputs
+  save_embeddings: true
+  save_per_node_diagnostics: true
+  save_train_curve: true
+  verify_assumptions: true
+
+runtime:
+  device: cuda
+  print_progress: true
+
+# -----------------------------------------------------------------------------
+# Sweep: 2D grid over (B_0, n).
+#
+# B_0 values span the bias cap from below |b*| (binding) to well above it.
+#
+# n values: same as the W_max ablation.
+# -----------------------------------------------------------------------------
+sweep:
+  mode: grid
+  axes:
+    - name: B_0
+      axis: decoder.B_0_spec.value
+      values: [2.0, 2.6, 3.4, 5.0, 8.0, 12.0]
+
+    - name: n
+      axis: sbm.n
+      values: [100, 200, 500, 1000, 2000]

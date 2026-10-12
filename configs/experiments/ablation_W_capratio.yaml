@@ -1,0 +1,119 @@
+extends: ../base.yaml
+
+# =============================================================================
+# W_max (decoder capacity) ablation: 2D sweep over (cap_ratio, n).
+#
+# Varies the decoder operator-norm cap W_max relative to capacity_required
+# (W_max = cap_ratio * capacity_required / R^2; cap_ratio < 1 gives
+# W_max * R^2 < capacity_required). W_max enters the main theorem through the
+# approximation term, the score range B = R^2 * W_max + B_0 (and hence mu_B
+# in Step 1), and the concentration term on held-out pairs (Step 0), which
+# scales with B. The n axis separates the n-dependent concentration term
+# from the n-independent mu_B.
+# =============================================================================
+experiment:
+  name: ablation_W_capratio
+  description: >
+    W_max (decoder capacity) ablation: 2D sweep over (cap_ratio, n) at the
+    K=3 baseline (p_in=0.10, p_out=0.04).
+
+# 10 seeds for clean median + IQR; reduce to 3 for smoke test.
+seeds:
+  list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# K=3 sym SBM, fixed (p_in, p_out) -- same baseline as main_sweep_n.
+# p_in/p_out are fixed across the sweep, so capacity_required is constant
+# and only cap_ratio varies.
+sbm:
+  K: 3
+  block_spec:
+    type: assortative
+    p_in: 0.10
+    p_out: 0.04
+  rho_n: 1.0
+  pi: uniform
+
+mask:
+  tau: 0.2
+
+# Single architecture: GIN + spectral PE.
+# Fixed here (not a sweep axis) to isolate the W_max effect.
+encoder:
+  family: gin
+  d: 16
+  hidden_dim: 64
+  num_layers: 2
+  use_layernorm: true
+  features:
+    mode: spectral_pe
+    dim: 8
+  R_spec:
+    mode: fixed
+    value: 1.5
+
+decoder:
+  family: bilinear
+  symmetric: true
+  # cap_ratio is the primary sweep axis (overridden by sweep below).
+  W_max_spec:
+    mode: from_capacity_ratio
+    capacity_ratio: 2.0          # placeholder; overridden by sweep
+  B_0_spec:
+    mode: from_b_star
+    slack: 0.5
+
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  max_epochs: 2500
+  patience: 80
+  early_stop: false
+  bias_init_mode: zero
+  random_init_half_range: 0.2
+  val_split_of_H: 0.5
+  restarts: 1
+  batch_mode: full_batch
+
+classifiers:
+  oracle:
+    enabled: true
+  plug_in:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  direct:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  kmeans:
+    enabled: true
+    n_init: 50
+
+output:
+  base_dir: outputs
+  save_embeddings: true
+  save_per_node_diagnostics: true
+  save_train_curve: true
+  verify_assumptions: true
+
+runtime:
+  device: cuda
+  num_workers: 6    
+  print_progress: true
+
+# -----------------------------------------------------------------------------
+# Sweep: 2D grid over (cap_ratio, n).
+#
+# cap_ratio values cover W_max below (cap_ratio < 1) and above
+# (cap_ratio > 1) capacity_required. n values are a subset of main_sweep_n.
+# -----------------------------------------------------------------------------
+sweep:
+  mode: grid
+  axes:
+    - name: cap_ratio
+      axis: decoder.W_max_spec.capacity_ratio
+      values: [0.25, 0.5, 0.75, 1.5, 2.0, 5.0, 10.0]
+
+    - name: n
+      axis: sbm.n
+      values: [100, 200, 500, 1000, 2000]

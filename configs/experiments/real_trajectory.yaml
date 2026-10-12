@@ -1,0 +1,127 @@
+extends: ../base.yaml
+
+experiment:
+  name: real_trajectory
+  description: >
+    Real-graph external-validity check.
+    Identical training hyperparameters to main_sweep_n.yaml; the ONLY changes
+    are (i) the graph comes from real/data.py instead of prepare_sbm_data,
+    (ii) eval_every > 0 so that the whole pretraining trajectory is logged,
+    (iii) restarts forced to 1 so one run == one trajectory.
+    sbm.n and sbm.K below are placeholders; the driver overwrites them from the
+    loaded graph before resolve_config is called.
+
+seeds:
+  list: [0, 1, 2]
+
+sbm:
+  n: 1000                  # overwritten by the driver
+  K: 3                     # overwritten by the driver
+  block_spec:              # unused: the block matrix is FITTED from the real
+    type: assortative      # graph in real/data.py::fit_block_matrix, and is
+    p_in: 0.1              # used only to set the capacity budget
+    p_out: 0.04
+  rho_n: 1.0
+  pi: uniform
+
+mask:
+  tau: 0.2
+
+encoder:
+  d: 16
+  hidden_dim: 64
+  use_layernorm: true
+  R_spec:
+    mode: fixed
+    value: 1.5
+
+decoder:
+  family: bilinear
+  symmetric: true
+  W_max_spec:
+    mode: from_capacity_ratio
+    capacity_ratio: 2.0
+  B_0_spec:
+    mode: from_b_star
+    slack: 0.5
+
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  max_epochs: 2500
+  patience: 80
+  early_stop: false
+  bias_init_mode: zero     # does not touch the fitted block model
+  random_init_half_range: 0.2
+  val_split_of_H: 0.5
+  restarts: 1              # one run = one trajectory
+  batch_mode: full_batch
+  eval_every: 25           # <-- the trajectory
+
+classifiers:
+  oracle:
+    enabled: false         # needs true P; undefined on a real graph
+  plug_in:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  direct:
+    enabled: true
+    m_per_class: [1, 5, 10, 20]
+    n_label_resamples: 5
+  kmeans:
+    enabled: true
+    n_init: 20
+
+output:
+  base_dir: outputs
+  save_embeddings: true
+  save_per_node_diagnostics: false
+  save_train_curve: true
+  verify_assumptions: false
+
+runtime:
+  device: cuda
+  print_progress: true
+
+sweep:
+  mode: grid
+  axes:
+    - name: arch
+      values:
+
+        - label: gin_pe
+          overrides:
+            encoder.family: gin
+            encoder.num_layers: 2
+            encoder.features.mode: spectral_pe
+            encoder.features.dim: 8
+
+        - label: gcn_pe
+          overrides:
+            encoder.family: gcn
+            encoder.num_layers: 2
+            encoder.features.mode: laplacian_pe
+            encoder.features.dim: 8
+
+        - label: gat_pe
+          overrides:
+            encoder.family: gat
+            encoder.num_layers: 2
+            encoder.num_heads: 4
+            encoder.features.mode: laplacian_pe
+            encoder.features.dim: 8
+
+        - label: gin_random
+          overrides:
+            encoder.family: gin
+            encoder.num_layers: 2
+            encoder.features.mode: random_normal
+            encoder.features.dim: 16
+
+        - label: cp_random
+          overrides:
+            encoder.family: centered_power
+            encoder.num_layers: 10
+            encoder.features.mode: random_normal
+            encoder.features.dim: 16
